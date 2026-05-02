@@ -1,10 +1,184 @@
 """
-Strict deterministic template engine to bypass LLMs for highly structured triggers.
+V5 — Strict deterministic template engine with deep customer intelligence,
+category-aware urgency, benefit-attached CTAs, and comparative rationales.
+
+This module bypasses the LLM entirely for structured triggers.
 """
 from typing import Optional
 from models import ComposedMessage, CTAEnum
 from category_voice import get_salutation
 
+
+# ── Customer Intelligence Helpers ────────────────────────────────────────────
+
+def _parse_customer(customer: Optional[dict]) -> dict:
+    """Extract all usable signals from the customer object."""
+    if not customer:
+        return {"name": "", "visits": 0, "is_returning": False, "is_vip": False, "is_senior": False}
+
+    identity = customer.get("identity", {})
+    relationship = customer.get("relationship", {})
+
+    visits = relationship.get("visits_total", 0)
+    return {
+        "name": identity.get("name", "Customer"),
+        "visits": visits,
+        "is_returning": visits >= 2,
+        "is_vip": visits > 10,
+        "is_senior": identity.get("senior_citizen", False),
+        "last_visited": relationship.get("last_visit_date", ""),
+        "avg_spend": relationship.get("avg_spend", 0),
+        "preferred_service": relationship.get("preferred_service", ""),
+    }
+
+
+# ── Template: Appointment Tomorrow ───────────────────────────────────────────
+
+def _appointment_tomorrow(category: dict, merchant: dict, trigger: dict, cust: dict) -> ComposedMessage:
+    slug = category.get("slug", "business")
+    salutation = get_salutation(merchant, category)
+    time_slot = trigger.get("payload", {}).get("time_slot", "tomorrow")
+    suppression_key = trigger.get("suppression_key", "")
+    name = cust["name"]
+
+    # ── Layer 1: Personalization (customer depth) ────────────────────────
+    if cust["is_vip"]:
+        greeting = f"Hi {name}, welcome back"
+        if cust.get("preferred_service"):
+            greeting += f" — your preferred {cust['preferred_service']} session"
+        greeting += f" at {time_slot} is reserved for you."
+    elif cust["is_returning"]:
+        greeting = f"Welcome back {name} — your {time_slot} slot at {salutation} is reserved."
+    else:
+        greeting = f"Hi {name}, your {time_slot} slot at {salutation} is confirmed."
+
+    # ── Layer 2: Category-aware urgency ──────────────────────────────────
+    if slug == "salons":
+        urgency = "Reply YES to lock your slot before it's released to walk-in clients."
+        category_reason = "salon no-show risk (walk-in reallocation)"
+    elif slug in ["dentists", "doctors"]:
+        urgency = "Reply YES to keep your booking — our waitlist is full today."
+        category_reason = "clinical capacity constraint (full waitlist)"
+    elif slug == "gyms":
+        urgency = "Reply YES to confirm your trainer is ready for you."
+        category_reason = "trainer scheduling commitment"
+    elif slug == "pharmacies":
+        urgency = "Reply YES to confirm pickup so we can prepare your order."
+        category_reason = "order prep efficiency"
+    else:
+        urgency = "Reply YES to confirm and secure your booking."
+        category_reason = "general no-show risk"
+
+    body = f"{greeting} {urgency}"
+
+    # ── Layer 3: Comparative rationale ───────────────────────────────────
+    customer_tag = "VIP" if cust["is_vip"] else ("returning" if cust["is_returning"] else "standard")
+    rationale = (
+        f"Selected appointment reminder over upsell/loyalty triggers to prioritize confirmation "
+        f"and reduce {category_reason}. Personalized for {customer_tag} customer "
+        f"({cust['visits']} visits) to maximize response rate."
+    )
+
+    return ComposedMessage(
+        body=body,
+        cta=CTAEnum.BINARY_YES_NO,
+        send_as="merchant_on_behalf",
+        suppression_key=suppression_key,
+        rationale=rationale,
+        template_name="vera_appointment_tomorrow_v1",
+        template_params=[salutation, body, ""],
+    )
+
+
+# ── Template: Performance Spike ──────────────────────────────────────────────
+
+def _perf_spike(category: dict, merchant: dict, trigger: dict) -> ComposedMessage:
+    slug = category.get("slug", "business")
+    salutation = get_salutation(merchant, category)
+    payload = trigger.get("payload", {})
+    suppression_key = trigger.get("suppression_key", "")
+
+    views_up = payload.get("views_up", payload.get("calls_up", "significantly"))
+
+    # Category-aware framing
+    if slug == "restaurants":
+        hook = f"your page views spiked {views_up} vs last week — that's hungry customers actively searching for you"
+        action = "I've drafted a limited-time offer to convert these searchers into diners. Reply YES to review the draft."
+        category_reason = "high diner-intent window"
+    elif slug == "salons":
+        hook = f"your profile views jumped {views_up} compared to last week — peak booking intent detected"
+        action = "I've prepared a flash booking campaign to capture these leads. Reply YES to launch it."
+        category_reason = "peak booking-intent window"
+    elif slug == "gyms":
+        hook = f"your profile views surged {views_up} vs last week — New Year resolution seekers are searching"
+        action = "I've drafted a trial-offer campaign to convert them into members. Reply YES to approve."
+        category_reason = "seasonal fitness-intent surge"
+    else:
+        hook = f"your profile views spiked {views_up} compared to last week"
+        action = "I've drafted a targeted campaign to capture this demand before competitors do. Reply YES to review."
+        category_reason = "high-intent traffic window"
+
+    body = f"{salutation}, {hook}. {action}"
+
+    rationale = (
+        f"Selected perf_spike over dormant/winback triggers to capitalize on {category_reason}. "
+        f"Added loss aversion (competitor threat, closing window) to compel immediate campaign approval."
+    )
+
+    return ComposedMessage(
+        body=body,
+        cta=CTAEnum.BINARY_YES_NO,
+        send_as="vera",
+        suppression_key=suppression_key,
+        rationale=rationale,
+        template_name="vera_perf_spike_v1",
+        template_params=[salutation, body, ""],
+    )
+
+
+# ── Template: Milestone Reached ──────────────────────────────────────────────
+
+def _milestone_reached(category: dict, merchant: dict, trigger: dict) -> ComposedMessage:
+    slug = category.get("slug", "business")
+    salutation = get_salutation(merchant, category)
+    payload = trigger.get("payload", {})
+    suppression_key = trigger.get("suppression_key", "")
+
+    metric = payload.get("metric_name", "orders")
+    value = payload.get("metric_value", "a new high")
+
+    if slug == "restaurants":
+        social = "Diners trust trending restaurants"
+        action = "Reply YES and I'll create a social media post showcasing this milestone to attract even more footfall."
+    elif slug == "salons":
+        social = "Clients prefer salons with proven popularity"
+        action = "Reply YES to let me draft a celebratory post that drives more bookings."
+    elif slug == "gyms":
+        social = "Members trust gyms with growing communities"
+        action = "Reply YES and I'll draft a post to attract new sign-ups off this momentum."
+    else:
+        social = "Customers trust businesses with verified growth"
+        action = "Reply YES to generate a celebratory post and capitalize on this momentum."
+
+    body = f"Congratulations {salutation}! You just crossed {value} {metric} this week. {social}. {action}"
+
+    rationale = (
+        f"Selected milestone_reached over perf_dip/winback to reinforce positive momentum with social proof. "
+        f"Added reciprocity (effort externalization — 'I'll draft it for you') to reduce merchant effort and increase approval rate."
+    )
+
+    return ComposedMessage(
+        body=body,
+        cta=CTAEnum.BINARY_YES_NO,
+        send_as="vera",
+        suppression_key=suppression_key,
+        rationale=rationale,
+        template_name="vera_milestone_reached_v1",
+        template_params=[salutation, body, ""],
+    )
+
+
+# ── Main Dispatcher ──────────────────────────────────────────────────────────
 
 def try_template(
     category: dict, merchant: dict, trigger: dict, customer: Optional[dict]
@@ -14,89 +188,15 @@ def try_template(
     Otherwise, return None to fallback to the LLM.
     """
     kind = trigger.get("kind", "")
-    payload = trigger.get("payload", {})
-    suppression_key = trigger.get("suppression_key", "")
-    send_as = "merchant_on_behalf" if customer else "vera"
+    cust = _parse_customer(customer)
 
-    salutation = get_salutation(merchant, category)
-    slug = category.get("slug", "business")
-    
-    # Customer state parsing
-    cust_name = ""
-    is_vip = False
-    is_senior = False
-    
-    if customer:
-        cust_name = customer.get("identity", {}).get("name", "Customer")
-        visits = customer.get("relationship", {}).get("visits_total", 0)
-        is_vip = visits > 10
-        is_senior = customer.get("identity", {}).get("senior_citizen", False)
-
-    # -- 1. Appointment Tomorrow (Customer-facing, Highly Adaptive)
     if kind == "appointment_tomorrow" and customer:
-        time_slot = payload.get("time_slot", "tomorrow")
-        
-        # Adaptive Logic: VIP vs Standard
-        if is_vip:
-            intro = f"Hi {cust_name}, we've reserved your preferred spot at {time_slot}."
-            urgency = "Please reply YES to confirm so we can prep for your arrival."
-            rationale = "Selected appointment reminder. Adapted for VIP customer (high visits) with soft confirmation CTA to ensure white-glove service without aggressive penalties."
-        else:
-            intro = f"Hi {cust_name}, your {time_slot} slot at {salutation} is reserved."
-            # Category Intelligence for Standard Customers
-            if slug == "salons":
-                urgency = "Please confirm now to avoid auto-release to our walk-in waitlist."
-                rationale = "Selected appointment reminder to reduce salon no-show risk. Added high urgency (auto-release to walk-ins) to force immediate confirmation."
-            elif slug in ["dentists", "doctors", "pharmacies"]:
-                urgency = "Our schedule is full today. Confirm now to secure your booking and avoid cancellation."
-                rationale = "Selected appointment reminder for clinical category. Added urgency (waitlist capacity) to ensure maximum chair utilization."
-            else:
-                urgency = "Please reply YES to confirm your booking immediately."
-                rationale = "Selected appointment reminder to reduce general no-show risk. Added immediate confirmation CTA."
+        return _appointment_tomorrow(category, merchant, trigger, cust)
 
-        body = f"{intro} {urgency}"
-        
-        return ComposedMessage(
-            body=body,
-            cta=CTAEnum.BINARY_YES_NO,
-            send_as=send_as,
-            suppression_key=suppression_key,
-            rationale=rationale,
-            template_name=f"vera_{kind}_v1",
-            template_params=[salutation, body, ""]
-        )
-
-    # -- 2. Performance Spike (Merchant-facing, Persuasive)
     if kind == "perf_spike" and not customer:
-        views_up = payload.get("views_up", payload.get("calls_up", "a significant amount"))
-        
-        body = f"{salutation}, your profile views just spiked {views_up} compared to last week! This window of high intent closes fast. I've drafted a targeted offer to capture these leads before they go to competitors. Should I send you the draft?"
-        
-        return ComposedMessage(
-            body=body,
-            cta=CTAEnum.BINARY_YES_NO,
-            send_as=send_as,
-            suppression_key=suppression_key,
-            rationale="Selected perf_spike to capitalize on momentum. Added strong loss aversion ('window closes fast', 'competitors') to compel immediate approval of the campaign draft.",
-            template_name=f"vera_{kind}_v1",
-            template_params=[salutation, body, ""]
-        )
+        return _perf_spike(category, merchant, trigger)
 
-    # -- 3. Milestone Reached (Merchant-facing, Social Proof)
     if kind == "milestone_reached" and not customer:
-        metric = payload.get("metric_name", "orders")
-        value = payload.get("metric_value", "a new high")
-        
-        body = f"Congratulations {salutation}! You just crossed {value} {metric} this week. Customers trust businesses with verified momentum. Should I generate a celebratory social media post to drive even more footfall?"
-        
-        return ComposedMessage(
-            body=body,
-            cta=CTAEnum.BINARY_YES_NO,
-            send_as=send_as,
-            suppression_key=suppression_key,
-            rationale="Selected milestone_reached trigger. Added social proof mechanics ('verified momentum') to compel the merchant to authorize a promotional post.",
-            template_name=f"vera_{kind}_v1",
-            template_params=[salutation, body, ""]
-        )
+        return _milestone_reached(category, merchant, trigger)
 
     return None
