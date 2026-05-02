@@ -30,6 +30,8 @@ def get_llm() -> LLMClient:
     return _llm
 
 
+from templates import try_template
+
 def compose(
     category: dict,
     merchant: dict,
@@ -51,11 +53,27 @@ def compose(
         if suppression.is_merchant_suppressed(merchant_id):
             logger.info(f"Merchant {merchant_id} is globally suppressed, skipping")
             return None
+        
+        # Check Fatigue
+        # Allow high urgency triggers (like supply_alert) to bypass fatigue
+        if trigger.get("urgency") != "high" and suppression.is_merchant_fatigued(merchant_id):
+            logger.info(f"Merchant {merchant_id} is fatigued, skipping {trigger_kind}")
+            return None
+
         if suppression_key and suppression.is_suppressed(suppression_key):
             logger.info(f"Suppression key {suppression_key} is active, skipping")
             return None
 
-    # ── Step 2: Build prompt via trigger dispatch ────────────────────────
+    # ── Step 2: Template Engine (LLM Bypass) ─────────────────────────────
+    template_match = try_template(category, merchant, trigger, customer)
+    if template_match:
+        logger.info(f"Template matched for {trigger_kind}. Bypassing LLM.")
+        if suppression and suppression_key:
+            suppression.suppress(suppression_key, trigger_kind)
+            suppression.suppress_merchant_fatigue(merchant_id)
+        return template_match
+
+    # ── Step 3: Build prompt via trigger dispatch ────────────────────────
     system_prompt, user_prompt = build_prompt(category, merchant, trigger, customer)
 
     # ── Step 3: LLM call ─────────────────────────────────────────────────
@@ -114,6 +132,7 @@ def compose(
     # ── Step 5: Register suppression ─────────────────────────────────────
     if suppression and suppression_key:
         suppression.suppress(suppression_key, trigger_kind)
+        suppression.suppress_merchant_fatigue(merchant_id)
 
     return result
 

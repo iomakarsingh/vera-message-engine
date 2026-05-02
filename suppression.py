@@ -78,6 +78,21 @@ class SuppressionRegistry:
             return False
         return True
 
+    def suppress_merchant_fatigue(self, merchant_id: str, ttl_seconds: int = 86400) -> None:
+        """Add a short cooldown after ANY message is sent to prevent spamming."""
+        # By default, 24-hour fatigue cooldown
+        self._merchant_suppressed[f"fatigue_{merchant_id}"] = time.time() + ttl_seconds
+
+    def is_merchant_fatigued(self, merchant_id: str) -> bool:
+        """Check if a merchant is currently in a fatigue cooldown."""
+        expiry = self._merchant_suppressed.get(f"fatigue_{merchant_id}")
+        if expiry is None:
+            return False
+        if time.time() > expiry:
+            del self._merchant_suppressed[f"fatigue_{merchant_id}"]
+            return False
+        return True
+
     def clear(self) -> None:
         """Clear all suppression state."""
         self._keys.clear()
