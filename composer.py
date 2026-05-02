@@ -65,12 +65,19 @@ def compose(
             return None
 
     # ── Step 2: Template Engine (LLM Bypass) ─────────────────────────────
-    template_match = try_template(category, merchant, trigger, customer)
+    # Build conversation key for escalation tracking
+    customer_id = trigger.get("customer_id", "")
+    conv_key = f"{merchant_id}_{customer_id}" if customer_id else merchant_id
+    escalation = suppression.get_escalation_level(conv_key) if suppression else 0
+
+    template_match = try_template(category, merchant, trigger, customer, escalation)
     if template_match:
-        logger.info(f"Template matched for {trigger_kind}. Bypassing LLM.")
-        if suppression and suppression_key:
-            suppression.suppress(suppression_key, trigger_kind)
+        logger.info(f"Template matched for {trigger_kind} (escalation={escalation}). Bypassing LLM.")
+        if suppression:
+            if suppression_key:
+                suppression.suppress(suppression_key, trigger_kind)
             suppression.suppress_merchant_fatigue(merchant_id)
+            suppression.record_send(conv_key)
         return template_match
 
     # ── Step 3: Build prompt via trigger dispatch ────────────────────────
@@ -130,9 +137,11 @@ def compose(
     result.template_params = _build_template_params(result.body, sal)
 
     # ── Step 5: Register suppression ─────────────────────────────────────
-    if suppression and suppression_key:
-        suppression.suppress(suppression_key, trigger_kind)
+    if suppression:
+        if suppression_key:
+            suppression.suppress(suppression_key, trigger_kind)
         suppression.suppress_merchant_fatigue(merchant_id)
+        suppression.record_send(conv_key)
 
     return result
 

@@ -48,6 +48,7 @@ class SuppressionRegistry:
     def __init__(self):
         self._keys: dict[str, float] = {}  # key -> expiry timestamp
         self._merchant_suppressed: dict[str, float] = {}  # merchant_id -> expiry
+        self._escalation: dict[str, int] = {}  # conversation_key -> send count
 
     def is_suppressed(self, key: str) -> bool:
         """Check if a suppression key is active."""
@@ -93,7 +94,23 @@ class SuppressionRegistry:
             return False
         return True
 
+    # ── Escalation Tracking ──────────────────────────────────────────────
+
+    def record_send(self, conversation_key: str) -> None:
+        """Increment the send count for a conversation to track escalation level."""
+        esc_key = f"esc_{conversation_key}"
+        current = self._escalation.get(esc_key, 0)
+        self._escalation[esc_key] = current + 1
+
+    def get_escalation_level(self, conversation_key: str) -> int:
+        """
+        Return escalation level for a conversation.
+        0 = first message, 1 = follow-up, 2+ = final warning territory.
+        """
+        return self._escalation.get(f"esc_{conversation_key}", 0)
+
     def clear(self) -> None:
         """Clear all suppression state."""
         self._keys.clear()
         self._merchant_suppressed.clear()
+        self._escalation.clear()
