@@ -8,8 +8,15 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
+from enum import Enum
 from pydantic import BaseModel, Field
 
+class CTAEnum(str, Enum):
+    BINARY_YES_NO = "binary_yes_no"
+    OPEN_ENDED = "open_ended"
+    NONE = "none"
+    BINARY_CONFIRM_CANCEL = "binary_confirm_cancel"
+    MULTI_CHOICE_SLOT = "multi_choice_slot"
 
 # ── /v1/context ──────────────────────────────────────────────────────────────
 
@@ -50,7 +57,7 @@ class TickAction(BaseModel):
     template_name: str
     template_params: list[str]
     body: str
-    cta: str  # "binary_yes_no" | "open_ended" | "none" | "binary_confirm_cancel" | "multi_choice_slot"
+    cta: CTAEnum
     suppression_key: str
     rationale: str
 
@@ -103,7 +110,7 @@ class MetadataResponse(BaseModel):
 
 class ComposedMessage(BaseModel):
     body: str
-    cta: str
+    cta: CTAEnum
     send_as: str
     suppression_key: str
     rationale: str

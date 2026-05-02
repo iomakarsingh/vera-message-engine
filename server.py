@@ -26,6 +26,7 @@ from context_store import ContextStore
 from composer import compose
 from reply_handler import ReplyHandler
 from suppression import SuppressionRegistry
+from scoring import rank_triggers
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -116,8 +117,14 @@ async def push_context(body: ContextPushRequest):
 @app.post("/v1/tick")
 async def tick(body: TickRequest):
     actions: list[dict] = []
+    
+    # 1. Rank all triggers by urgency and category relevance
+    ranked_trigger_ids = rank_triggers(body.available_triggers, store)
+    
+    # 2. Track which conversations we've already messaged in this tick
+    processed_convs = set()
 
-    for trigger_id in body.available_triggers:
+    for trigger_id in ranked_trigger_ids:
         if len(actions) >= 20:  # Cap per spec
             break
 
@@ -127,19 +134,24 @@ async def tick(body: TickRequest):
             continue
 
         merchant_id = trigger.get("merchant_id", "")
+        customer_id = trigger.get("customer_id")
+        
+        # Define conversation scope
+        conv_key = f"{merchant_id}_{customer_id}" if customer_id else merchant_id
+        
+        # Only process ONE best trigger per conversation per tick
+        if conv_key in processed_convs:
+            continue
+
         merchant = store.get_merchant(merchant_id)
         if not merchant:
-            logger.warning(f"Merchant {merchant_id} not found for trigger {trigger_id}")
             continue
 
         category_slug = merchant.get("category_slug", "")
         category = store.get_category(category_slug)
         if not category:
-            logger.warning(f"Category {category_slug} not found for merchant {merchant_id}")
             continue
 
-        # Load customer if customer-scoped
-        customer_id = trigger.get("customer_id")
         customer = store.get_customer(customer_id) if customer_id else None
 
         # Compose
@@ -151,6 +163,8 @@ async def tick(body: TickRequest):
 
         if result is None:
             continue  # Suppressed
+            
+        processed_convs.add(conv_key)
 
         # Build conversation ID
         conv_id = f"conv_{merchant_id}_{trigger_id}"

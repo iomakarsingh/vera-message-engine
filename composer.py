@@ -84,6 +84,21 @@ def compose(
         except Exception:
             pass  # Keep the original if re-prompt fails
 
+    # Numeric Grounding Enforcement
+    if not re.search(r'\d+', result.body):
+        logger.warning("No numbers found in composed message. Re-prompting for numeric grounding.")
+        try:
+            num_prompt = (
+                f"Your previous message completely failed to include any specific numbers. "
+                f"You MUST rewrite it to include at least one concrete number (e.g. %, ₹, dates) "
+                f"from the context payload. \n\n"
+                f"Previous message: {result.body}"
+            )
+            raw_num_fix = get_llm().complete(system_prompt, num_prompt)
+            result = _parse_llm_response(raw_num_fix, trigger, customer)
+        except Exception:
+            pass
+
     # Ensure send_as is correct for customer-scoped triggers
     if customer and trigger.get("scope") == "customer":
         result.send_as = "merchant_on_behalf"
@@ -103,30 +118,36 @@ def compose(
     return result
 
 
+from models import ComposedMessage, CTAEnum
+
 def _parse_llm_response(raw: str, trigger: dict, customer: Optional[dict]) -> ComposedMessage:
     """Parse structured JSON from LLM response."""
     # Try to find JSON block
     json_match = re.search(r'\{[\s\S]*\}', raw)
+    body = raw.strip()
+    cta_str = "open_ended"
+    rationale = "LLM response parsing failed — using raw text"
+    
     if json_match:
         try:
             data = json.loads(json_match.group())
-            return ComposedMessage(
-                body=data.get("body", raw),
-                cta=data.get("cta", "open_ended"),
-                send_as=data.get("send_as", "merchant_on_behalf" if customer else "vera"),
-                suppression_key=trigger.get("suppression_key", ""),
-                rationale=data.get("rationale", ""),
-            )
+            body = data.get("body", raw)
+            cta_str = data.get("cta", "open_ended")
+            rationale = data.get("rationale", "")
         except json.JSONDecodeError:
             pass
 
-    # Fallback: treat entire response as body
+    # Normalize CTA
+    valid_ctas = {e.value for e in CTAEnum}
+    if cta_str not in valid_ctas:
+        cta_str = CTAEnum.OPEN_ENDED.value
+
     return ComposedMessage(
-        body=raw.strip(),
-        cta="open_ended",
+        body=body,
+        cta=CTAEnum(cta_str),
         send_as="merchant_on_behalf" if customer else "vera",
         suppression_key=trigger.get("suppression_key", ""),
-        rationale="LLM response parsing failed — using raw text",
+        rationale=rationale,
     )
 
 
@@ -146,7 +167,7 @@ def _fallback_compose(
 
     return ComposedMessage(
         body=body,
-        cta="open_ended",
+        cta=CTAEnum.OPEN_ENDED,
         send_as="merchant_on_behalf" if customer else "vera",
         suppression_key=trigger.get("suppression_key", ""),
         rationale=f"Fallback composition for {kind} trigger — LLM unavailable",

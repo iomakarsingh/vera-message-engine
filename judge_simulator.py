@@ -38,7 +38,7 @@ LLM_MODEL = "llama-3.3-70b-versatile"
 OLLAMA_URL = "http://localhost:11434"
 
 # Which test to run by default
-TEST_SCENARIO = "phase2_short"
+TEST_SCENARIO = "all"
 
 # =============================================================================
 # ██████  END OF CONFIGURATION - DON'T EDIT BELOW THIS LINE ██████
